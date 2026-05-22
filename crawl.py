@@ -1,6 +1,9 @@
-from urllib.parse import urlparse, urljoin
-from bs4 import BeautifulSoup, Tag
 from typing import TypedDict
+from urllib.parse import urlparse, urljoin
+
+from bs4 import BeautifulSoup, Tag
+import requests
+
 
 class PageData(TypedDict):
     url: str
@@ -8,6 +11,7 @@ class PageData(TypedDict):
     first_paragraph: str
     outgoing_links: list[str]
     image_urls: list[str]
+
 
 def normalize_url(url: str) -> str:
     parsed_url = urlparse(url)
@@ -71,17 +75,71 @@ def get_images_from_html(html: str, base_url: str) -> list[str]:
 
     return image_urls
 
-def extract_page_data(html: str, page_url: str) -> PageData:
-    url = page_url
-    heading = get_heading_from_html(html)
-    first_paragraph = get_first_paragraph_from_html(html)
-    outgoing_links = get_urls_from_html(html, page_url)
-    image_urls = get_images_from_html(html, page_url)
 
+def extract_page_data(html: str, page_url: str) -> PageData:
     return {
-        "url": url,
-        "heading": heading,
-        "first_paragraph": first_paragraph,
-        "outgoing_links": outgoing_links,
-        "image_urls": image_urls,
+        "url": page_url,
+        "heading": get_heading_from_html(html),
+        "first_paragraph": get_first_paragraph_from_html(html),
+        "outgoing_links": get_urls_from_html(html, page_url),
+        "image_urls": get_images_from_html(html, page_url),
     }
+
+
+def crawl_page(
+    base_url: str,
+    current_url: str | None = None,
+    page_data: dict[str, PageData] | None = None,
+) -> dict[str, PageData]:
+    if current_url is None:
+        current_url = base_url
+    if page_data is None:
+        page_data = {}
+
+    base_url_obj = urlparse(base_url)
+    current_url_obj = urlparse(current_url)
+    if current_url_obj.netloc != base_url_obj.netloc:
+        return page_data
+
+    normalized_url = normalize_url(current_url)
+
+    if normalized_url in page_data:
+        return page_data
+
+    print(f"crawling {current_url}")
+    html = safe_get_html(current_url)
+    if html is None:
+        return page_data
+
+    page_info = extract_page_data(html, current_url)
+    page_data[normalized_url] = page_info
+
+    next_urls = get_urls_from_html(html, base_url)
+    for next_url in next_urls:
+        page_data = crawl_page(base_url, next_url, page_data)
+
+    return page_data
+
+
+def get_html(url: str) -> str:
+    try:
+        response = requests.get(url)
+    except Exception as e:
+        raise Exception(f"network error while fetching {url}: {e}")
+
+    if response.status_code > 399:
+        raise Exception(f"got HTTP error: {response.status_code} {response.reason}")
+
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type:
+        raise Exception(f"got non-HTML response: {content_type}")
+
+    return response.text
+
+
+def safe_get_html(url: str) -> str | None:
+    try:
+        return get_html(url)
+    except Exception as e:
+        print(f"{e}")
+        return None
